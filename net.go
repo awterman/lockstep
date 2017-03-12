@@ -92,7 +92,7 @@ func (p *timeoutConn) Write(b []byte) (n int, err error) {
 }
 
 // establish simplex connections.
-func Connect(remoteHost string) (*LockStep, error) {
+func Connect(remoteHost string) (*Instance, error) {
 	var (
 		rConn net.Conn
 		wConn net.Conn

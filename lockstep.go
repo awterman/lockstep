@@ -51,15 +51,12 @@ type lockStep struct {
 	topFrameEndTime time.Duration
 }
 
-func newLockStep(frameSpan time.Duration) *lockStep {
+func newLockStep(frameSpan time.Duration, startTime time.Time) *lockStep {
 	return &lockStep{
-		frameSpan: frameSpan,
+		frameSpan:       frameSpan,
+		startTime:       startTime,
+		topFrameEndTime: frameSpan,
 	}
-}
-
-func (p *lockStep) reset() {
-	p.startTime = time.Now()
-	p.topFrameEndTime = p.frameSpan
 }
 
 func (p *lockStep) appendOperation(op Operation) {
@@ -112,13 +109,23 @@ func (p *lockStep) exchange(r io.Reader, w io.Writer) error {
 	return nil
 }
 
-func (p *lockStep) start(r io.Reader, w io.Writer) *LockStep {
+type Instance struct {
+	Ops    chan<- Operation
+	Frames <-chan Frame
+	Errs   <-chan error
+
+	quits chan<- bool
+}
+
+func New(frameSpan time.Duration, r io.Reader, w io.Writer) *Instance {
+	ls := newLockStep(frameSpan, time.Now())
+
 	ops := make(chan Operation)
 	frames := make(chan Frame)
 	errs := make(chan error, 1)
 	quits := make(chan bool, 2) // the capacity is the number of go routines.
 
-	ls := &LockStep{
+	instance := &Instance{
 		Ops:    ops,
 		Frames: frames,
 		Errs:   errs,
@@ -126,31 +133,29 @@ func (p *lockStep) start(r io.Reader, w io.Writer) *LockStep {
 		quits: quits,
 	}
 
-	p.reset()
-
 	// get op.
 	go func() {
 		select {
 		case op := <-ops:
-			p.appendOperation(op)
+			ls.appendOperation(op)
 		case <-quits:
 			return
 		}
 	}()
 
 	// emit merged frame.
-	ticker := time.NewTicker(p.frameSpan)
+	ticker := time.NewTicker(frameSpan)
 	go func() {
 		select {
 		case <-ticker.C:
-			err := p.exchange(r, w)
+			err := ls.exchange(r, w)
 			if err != nil {
 				errs <- err
-				ls.Stop()
+				instance.Stop()
 			}
 
 			// consider the second frame to the last finished merging.
-			frames <- p.frames[len(p.frames)-2]
+			frames <- ls.frames[len(ls.frames)-2]
 
 		case <-quits:
 			ticker.Stop()
@@ -160,25 +165,13 @@ func (p *lockStep) start(r io.Reader, w io.Writer) *LockStep {
 		}
 	}()
 
-	return ls
+	return instance
 }
 
-type LockStep struct {
-	Ops    chan<- Operation
-	Frames <-chan Frame
-	Errs   <-chan error
-
-	quits chan<- bool
-}
-
-func (p *LockStep) Stop() {
+func (p *Instance) Stop() {
 	for i := 0; i < cap(p.quits); i++ {
 		p.quits <- true
 	}
 
 	close(p.quits)
-}
-
-func New(frameSpan time.Duration, r io.Reader, w io.Writer) *LockStep {
-	return newLockStep(frameSpan).start(r, w)
 }
