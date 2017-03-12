@@ -1,5 +1,5 @@
 // Package lockstep is a online module for multi-player standalone games.
-// Because lockstep just simulates the operations, it highly relies on the quality of network. There is no tolerance for packet loss or lag.
+// Because lockstep just simulates the operations, it highly relies on the quality of network. There is no tolerance for packet loss.
 package lockstep
 
 import (
@@ -48,6 +48,7 @@ type lockStep struct {
 	startTime time.Time
 
 	frames          []Frame
+	confirmIndex    int
 	topFrameEndTime time.Duration
 }
 
@@ -56,6 +57,7 @@ func newLockStep(frameSpan time.Duration, startTime time.Time) *lockStep {
 		frameSpan:       frameSpan,
 		startTime:       startTime,
 		topFrameEndTime: frameSpan,
+		confirmIndex:    -1,
 	}
 }
 
@@ -67,16 +69,18 @@ func (p *lockStep) appendOperation(op Operation) {
 
 	if ins.Ts > p.topFrameEndTime {
 		p.frames = append(p.frames, Frame{})
+		p.topFrameEndTime += p.frameSpan
 	}
 
 	frame := &p.frames[len(p.frames)-1]
 	frame.Inss = append(frame.Inss, ins)
 }
 
-func (p *lockStep) exchange(r io.Reader, w io.Writer) error {
+func (p *lockStep) exchangeOne(r io.Reader, w io.Writer) error {
 	// json encoding is slow but easy to use.
 
-	localFrame := p.frames[len(p.frames)-2]
+	confirmIndex := p.confirmIndex + 1
+	localFrame := p.frames[confirmIndex]
 	go func() {
 		j, _ := json.Marshal(&localFrame)
 		len_ := len(j)
@@ -105,7 +109,8 @@ func (p *lockStep) exchange(r io.Reader, w io.Writer) error {
 		return err
 	}
 
-	p.frames[len(p.frames)-2].merge(&remoteFrame)
+	p.frames[confirmIndex].merge(&remoteFrame)
+	p.confirmIndex = confirmIndex
 	return nil
 }
 
@@ -148,14 +153,14 @@ func New(frameSpan time.Duration, r io.Reader, w io.Writer) *Instance {
 	go func() {
 		select {
 		case <-ticker.C:
-			err := ls.exchange(r, w)
+			err := ls.exchangeOne(r, w)
 			if err != nil {
 				errs <- err
 				instance.Stop()
 			}
 
 			// consider the second frame to the last finished merging.
-			frames <- ls.frames[len(ls.frames)-2]
+			frames <- ls.frames[ls.confirmIndex]
 
 		case <-quits:
 			ticker.Stop()
