@@ -115,6 +115,8 @@ func (p *lockStep) exchangeOne(r io.Reader, w io.Writer) error {
 }
 
 type Instance struct {
+	ls *lockStep
+
 	Ops    chan<- Operation
 	Frames <-chan Frame
 	Errs   <-chan error
@@ -136,6 +138,7 @@ func New(frameSpan time.Duration, r io.Reader, w io.Writer) *Instance {
 		Errs:   errs,
 
 		quits: quits,
+		ls:    ls,
 	}
 
 	// get op.
@@ -179,4 +182,8 @@ func (p *Instance) Stop() {
 	}
 
 	close(p.quits)
+}
+
+func (p *Instance) StartTime() time.Time {
+	return p.ls.startTime
 }
